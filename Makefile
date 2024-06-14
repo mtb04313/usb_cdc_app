@@ -85,7 +85,8 @@ VERBOSE=
 # ... then code in directories named COMPONENT_foo and COMPONENT_bar will be
 # added to the build
 #
-COMPONENTS=USBD_BASE
+#COMPONENTS=USBD_BASE
+COMPONENTS=FREERTOS RTOS_AWARE USBD_BASE
 
 # Like COMPONENTS, but disable optional code that was enabled by default.
 DISABLE_COMPONENTS=
@@ -98,10 +99,12 @@ SOURCES=
 
 # Like SOURCES, but for include directories. Value should be paths to
 # directories (without a leading -I).
-INCLUDES=
+#INCLUDES=
+INCLUDES=./configs
 
 # Add additional defines to the build process (without a leading -D).
-DEFINES=
+#DEFINES=
+DEFINES=CY_RTOS_AWARE
 
 # Select softfp or hardfp floating point. Default is softfp.
 VFP_SELECT=
