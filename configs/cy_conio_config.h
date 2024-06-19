@@ -1,14 +1,14 @@
 /******************************************************************************
-* File Name:   main.c
+* File Name:   cy_conio_config.h
 *
-* Description: This is the source code for the USB Device CDC echo Example
-*              for ModusToolbox.
+* Description: This file is used by cy_conio.c to choose between PDL or HAL
+*              cy_retarget_io functions
 *
 * Related Document: See README.md
 *
 *
 *******************************************************************************
-* Copyright 2021-2024, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2020-2021, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -40,72 +40,27 @@
 * so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
-#include "cy_pdl.h"
-#include "cyhal.h"
-#include "cybsp.h"
-#include "cy_retarget_io.h"
-#include <stdio.h>
-
-#include "cyabs_rtos.h"
-#include "usbd_cdc_task.h"
-#include "cy_debug.h"
-
 /*******************************************************************************
-* Macros
-********************************************************************************/
+ *  Include guard
+ ******************************************************************************/
+#ifndef SOURCE_CY_CONIO_CONFIG_H_
+#define SOURCE_CY_CONIO_CONFIG_H_
 
-/*******************************************************************************
-* Function Prototypes
-********************************************************************************/
-
-/*******************************************************************************
-* Global Variables
-*******************************************************************************/
-/* This enables RTOS aware debugging. */
-volatile int uxTopUsedPriority;
-
-
-int main(void)
+#ifdef __cplusplus
+extern "C"
 {
-    uxTopUsedPriority = configMAX_PRIORITIES - 1;
+#endif
 
-    cy_rslt_t result;
+/*******************************************************************************
+ * Macros
+ ******************************************************************************/
 
-    /* Initialize the device and board peripherals */
-    result = cybsp_init() ;
+#define USE_CY_RETARGET_IO_HAL      1 // 1:HAL, 0:PDL
 
-    if (result != CY_RSLT_SUCCESS) {
-        CY_ASSERT(0);
-    }
-
-    /* Enable global interrupts */
-    __enable_irq();
-
-    /* Initialize retarget-io to use the debug UART port */
-    cy_retarget_io_init(CYBSP_DEBUG_UART_TX, CYBSP_DEBUG_UART_RX, CY_RETARGET_IO_BAUDRATE);
-
-    /* \x1b[2J\x1b[;H - ANSI ESC sequence for clear screen */
-    DEBUG_PRINT(("\x1b[2J\x1b[;H"));
-
-    DEBUG_PRINT(("****************** "
-                 "emUSB Device: CDC echo application "
-                 "****************** \n\n"));
-
-    xTaskCreate((void *)usbd_cdc_task,
-                "USBD CDC Task",
-                USBD_CDC_TASK_STACK_SIZE,
-                NULL,
-                USBD_CDC_TASK_PRIORITY,
-                NULL);
-
-    /* Start the scheduler */
-    vTaskStartScheduler();
-
-    /* Should never get here */
-    CY_ASSERT(0);
-
-    return 0;
+#ifdef __cplusplus
 }
+#endif
 
+#endif /* SOURCE_CY_CONIO_CONFIG_H_ */
 
 /* [] END OF FILE */

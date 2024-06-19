@@ -1,9 +1,10 @@
 # Documentation
 images
-templates
 
 # Exports, Project settings
 .mtbLaunchConfigs
 .settings
 .vscode
+
+$(SEARCH_platform-utilities)/source/cy_sntp_time.c
 

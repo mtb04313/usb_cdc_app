@@ -1,14 +1,12 @@
 /******************************************************************************
-* File Name:   main.c
+* File Name: usbd_cdc_task.h
 *
-* Description: This is the source code for the USB Device CDC echo Example
-*              for ModusToolbox.
+* Description: This is the source code to handle USB device CDC communication
 *
 * Related Document: See README.md
 *
-*
 *******************************************************************************
-* Copyright 2021-2024, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2020-2022, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -40,72 +38,13 @@
 * so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
-#include "cy_pdl.h"
-#include "cyhal.h"
-#include "cybsp.h"
-#include "cy_retarget_io.h"
-#include <stdio.h>
+#ifndef SOURCE_USBD_CDC_TASK_H_
+#define SOURCE_USBD_CDC_TASK_H_
 
-#include "cyabs_rtos.h"
-#include "usbd_cdc_task.h"
-#include "cy_debug.h"
+#define USBD_CDC_TASK_STACK_SIZE 4096
+#define USBD_CDC_TASK_PRIORITY   CY_RTOS_PRIORITY_LOW
 
-/*******************************************************************************
-* Macros
-********************************************************************************/
-
-/*******************************************************************************
-* Function Prototypes
-********************************************************************************/
-
-/*******************************************************************************
-* Global Variables
-*******************************************************************************/
-/* This enables RTOS aware debugging. */
-volatile int uxTopUsedPriority;
+void usbd_cdc_task(void);
 
 
-int main(void)
-{
-    uxTopUsedPriority = configMAX_PRIORITIES - 1;
-
-    cy_rslt_t result;
-
-    /* Initialize the device and board peripherals */
-    result = cybsp_init() ;
-
-    if (result != CY_RSLT_SUCCESS) {
-        CY_ASSERT(0);
-    }
-
-    /* Enable global interrupts */
-    __enable_irq();
-
-    /* Initialize retarget-io to use the debug UART port */
-    cy_retarget_io_init(CYBSP_DEBUG_UART_TX, CYBSP_DEBUG_UART_RX, CY_RETARGET_IO_BAUDRATE);
-
-    /* \x1b[2J\x1b[;H - ANSI ESC sequence for clear screen */
-    DEBUG_PRINT(("\x1b[2J\x1b[;H"));
-
-    DEBUG_PRINT(("****************** "
-                 "emUSB Device: CDC echo application "
-                 "****************** \n\n"));
-
-    xTaskCreate((void *)usbd_cdc_task,
-                "USBD CDC Task",
-                USBD_CDC_TASK_STACK_SIZE,
-                NULL,
-                USBD_CDC_TASK_PRIORITY,
-                NULL);
-
-    /* Start the scheduler */
-    vTaskStartScheduler();
-
-    /* Should never get here */
-    CY_ASSERT(0);
-
-    return 0;
-}
-
-
-/* [] END OF FILE */
+#endif /* SOURCE_USBD_CDC_TASK_H_ */

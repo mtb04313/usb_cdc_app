@@ -1,14 +1,13 @@
 /******************************************************************************
-* File Name:   main.c
+* File Name:   time_config.h
 *
-* Description: This is the source code for the USB Device CDC echo Example
-*              for ModusToolbox.
+* Description: This file has timestamp related configuration
 *
 * Related Document: See README.md
 *
 *
 *******************************************************************************
-* Copyright 2021-2024, Cypress Semiconductor Corporation (an Infineon company) or
+* Copyright 2020-2021, Cypress Semiconductor Corporation (an Infineon company) or
 * an affiliate of Cypress Semiconductor Corporation.  All rights reserved.
 *
 * This software, including source code, documentation and related
@@ -40,72 +39,50 @@
 * so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
-#include "cy_pdl.h"
-#include "cyhal.h"
-#include "cybsp.h"
-#include "cy_retarget_io.h"
-#include <stdio.h>
-
-#include "cyabs_rtos.h"
-#include "usbd_cdc_task.h"
-#include "cy_debug.h"
-
 /*******************************************************************************
-* Macros
-********************************************************************************/
+ *  Include guard
+ ******************************************************************************/
+#ifndef SOURCE_TIME_CONFIG_H_
+#define SOURCE_TIME_CONFIG_H_
 
-/*******************************************************************************
-* Function Prototypes
-********************************************************************************/
+#include <stdint.h>
+#include <cmsis_gcc.h>  // for __PACKED_STRUCT
 
-/*******************************************************************************
-* Global Variables
-*******************************************************************************/
-/* This enables RTOS aware debugging. */
-volatile int uxTopUsedPriority;
-
-
-int main(void)
+#ifdef __cplusplus
+extern "C"
 {
-    uxTopUsedPriority = configMAX_PRIORITIES - 1;
+#endif
 
-    cy_rslt_t result;
+/*******************************************************************************
+ * Macros
+ ******************************************************************************/
 
-    /* Initialize the device and board peripherals */
-    result = cybsp_init() ;
+/* Configure the timestamp */
+#define DEFAULT_TIMESTAMP_SEC      -461020808L // must be int32_t
 
-    if (result != CY_RSLT_SUCCESS) {
-        CY_ASSERT(0);
-    }
+#define MIN_TIMESTAMP_SEC          -461020808L // 29-Jun 2021 9:08am GMT or 17:08 SGP
+#define MAX_TIMESTAMP_SEC          (MIN_TIMESTAMP_SEC + 3600*24*365*10) // +10 years
 
-    /* Enable global interrupts */
-    __enable_irq();
+/* Configure the timezone */
+#define DEFAULT_TIMEZONE_DIFF       0 // was +8
+#define MIN_TIMEZONE_DIFF           -12
+#define MAX_TIMEZONE_DIFF           +14
 
-    /* Initialize retarget-io to use the debug UART port */
-    cy_retarget_io_init(CYBSP_DEBUG_UART_TX, CYBSP_DEBUG_UART_RX, CY_RETARGET_IO_BAUDRATE);
+/*******************************************************************************
+ * Structures
+ ******************************************************************************/
 
-    /* \x1b[2J\x1b[;H - ANSI ESC sequence for clear screen */
-    DEBUG_PRINT(("\x1b[2J\x1b[;H"));
+/* Structure to store time related info that goes into EEPROM */
+typedef __PACKED_STRUCT
+{
+    int32_t timestamp;    // e.g. -461020808L
+    float timezone_diff;  // e.g. +5.5
+} cy_time_info_t;
 
-    DEBUG_PRINT(("****************** "
-                 "emUSB Device: CDC echo application "
-                 "****************** \n\n"));
-
-    xTaskCreate((void *)usbd_cdc_task,
-                "USBD CDC Task",
-                USBD_CDC_TASK_STACK_SIZE,
-                NULL,
-                USBD_CDC_TASK_PRIORITY,
-                NULL);
-
-    /* Start the scheduler */
-    vTaskStartScheduler();
-
-    /* Should never get here */
-    CY_ASSERT(0);
-
-    return 0;
+#ifdef __cplusplus
 }
+#endif
 
+#endif /* SOURCE_TIME_CONFIG_H_ */
 
 /* [] END OF FILE */

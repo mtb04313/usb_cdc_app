@@ -104,7 +104,7 @@ INCLUDES=./configs
 
 # Add additional defines to the build process (without a leading -D).
 #DEFINES=
-DEFINES=CY_RTOS_AWARE
+DEFINES=CY_RETARGET_IO_CONVERT_LF_TO_CRLF CY_RTOS_AWARE
 
 # Select softfp or hardfp floating point. Default is softfp.
 VFP_SELECT=
