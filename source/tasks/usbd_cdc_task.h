@@ -48,8 +48,7 @@ extern "C" {
 #define USBD_CDC_TASK_STACK_SIZE 4096
 #define USBD_CDC_TASK_PRIORITY   CY_RTOS_PRIORITY_LOW
 
-void usbd_cdc_read_task(void);
-void usbd_cdc_write_task(void);
+void setup_usbd_cdc_tasks(void);
 
 #ifdef __cplusplus
 }

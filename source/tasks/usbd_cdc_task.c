@@ -61,7 +61,7 @@
  *****************************************************************************/
 #define USB_CONFIG_DELAY          (50U) /* In milliseconds */
 #define USB_RX_DATA_QUEUE_SIZE    10
-
+#define USB_TX_DATA_QUEUE_SIZE    10
 
 /****************************************************************************
  * Local Data
@@ -77,6 +77,7 @@ static const USB_DEVICE_INFO s_usb_deviceInfo = {
 };
 
 static cy_queue_t s_usb_rx_queue = NULL;
+static cy_queue_t s_usb_tx_queue = NULL;
 static USB_CDC_HANDLE s_usb_cdcHandle = 0;
 
 /****************************************************************************
@@ -129,30 +130,17 @@ static USB_CDC_HANDLE usb_add_cdc(void)
     return USBD_CDC_Add(&InitData);
 }
 
-/****************************************************************************
- * Public Functions
- *****************************************************************************/
 
-void usbd_cdc_read_task(void)
+// read USB packets, cache it, and put into a RX queue
+static void usbd_cdc_read_task(void)
 {
     char read_buffer[USB_FS_BULK_MAX_PACKET_SIZE];
     static char cached_buffer[USB_FS_BULK_MAX_PACKET_SIZE * 10];
 
-    cy_rslt_t result;
     int num_bytes_read;
     int num_bytes_cached = 0;
 
     CY_LOGD(TAG, "%s [%d]\n", __FUNCTION__, __LINE__);
-
-    /* Initialize the User LED */
-    result = cyhal_gpio_init(CYBSP_USER_LED,
-                             CYHAL_GPIO_DIR_OUTPUT,
-                             CYHAL_GPIO_DRIVE_STRONG,
-                             CYBSP_LED_STATE_OFF);
-
-    if (result != CY_RSLT_SUCCESS) {
-        CY_ASSERT(0);
-    }
 
     /* Initializes the USB stack */
     USBD_Init();
@@ -166,17 +154,6 @@ void usbd_cdc_read_task(void)
     /* Start the USB stack */
     USBD_Start();
 
-    /* Turning the LED on to indicate device is active */
-    cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_ON);
-
-    VoidAssert(s_usb_rx_queue == NULL);
-
-    result = cy_rtos_init_queue(&s_usb_rx_queue,
-                                USB_RX_DATA_QUEUE_SIZE,
-                                sizeof(cy_message_t));
-    VoidAssert(result == CY_RSLT_SUCCESS);
-    VoidAssert(s_usb_rx_queue != NULL);
-
     for (;;)
     {
         /* Wait for configuration */
@@ -188,6 +165,9 @@ void usbd_cdc_read_task(void)
         num_bytes_read = USBD_CDC_Receive(s_usb_cdcHandle, read_buffer, sizeof(read_buffer), 0);
         DEBUG_PRINT(("%d read\n", num_bytes_read));
 
+        // toggle the LED to show activity
+        cyhal_gpio_toggle(CYBSP_USER_LED);
+
         DEBUG_ASSERT(num_bytes_read <= (sizeof(cached_buffer) - num_bytes_cached));
         memcpy(cached_buffer + num_bytes_cached, read_buffer, num_bytes_read);
         num_bytes_cached += num_bytes_read;
@@ -196,14 +176,17 @@ void usbd_cdc_read_task(void)
             ((read_buffer[num_bytes_read - 1] == '\r') ||
              (read_buffer[num_bytes_read - 1] == '\n')))
         {
-            cy_message_t message;
-            message.length = num_bytes_cached;
-            message.buf_p = (uint8_t*)CY_MEMTRACK_MALLOC(message.length);
-            VoidAssert(message.buf_p != NULL);
+            cy_rslt_t result;
+            cy_message_t send_msg = {
+                .buf_p = (uint8_t*)CY_MEMTRACK_MALLOC(num_bytes_cached),
+                .length = num_bytes_cached,
+            };
 
-            memcpy(message.buf_p, cached_buffer, message.length);
+            VoidAssert(send_msg.buf_p != NULL);
+
+            memcpy(send_msg.buf_p, cached_buffer, send_msg.length);
             result = cy_rtos_put_queue( &s_usb_rx_queue,
-                                        &message,
+                                        &send_msg,
                                         0,
                                         false);
 
@@ -212,7 +195,7 @@ void usbd_cdc_read_task(void)
                 cy_rtos_count_queue(&s_usb_rx_queue,
                                     &num_items);
 
-                CY_LOGD(TAG, "%s [%d]: put_queue failed - num_items = %d", __FUNCTION__, __LINE__, num_items);
+                CY_LOGD(TAG, "%s [%d]: put_rx_queue failed - num_items = %d", __FUNCTION__, __LINE__, num_items);
                 VoidAssert(0);
             }
 
@@ -221,33 +204,14 @@ void usbd_cdc_read_task(void)
 
         cyhal_syspm_sleep();
     }
-
-    if (s_usb_rx_queue != NULL) {
-        cy_rtos_deinit_queue(&s_usb_rx_queue);
-        s_usb_rx_queue = NULL;
-    }
 }
 
-void usbd_cdc_write_task(void)
+static void usbd_cdc_worker_task(void)
 {
-    bool result;
-
     CY_LOGD(TAG, "%s [%d]\n", __FUNCTION__, __LINE__);
-
-    /* Wait for rx_queue to be setup*/
-    while (s_usb_rx_queue == NULL)
-    {
-        cyhal_system_delay_ms(USB_CONFIG_DELAY);
-    }
 
     for (;;)
     {
-        /* Wait for configuration */
-        while ((USBD_GetState() & (USB_STAT_CONFIGURED | USB_STAT_SUSPENDED)) != USB_STAT_CONFIGURED)
-        {
-            cyhal_system_delay_ms(USB_CONFIG_DELAY);
-        }
-
         cy_message_t send_msg = {
             .buf_p = NULL,
             .length = 0,
@@ -265,45 +229,163 @@ void usbd_cdc_write_task(void)
             .length = 0,
         };
 
-        result = process_message(&send_msg, &reply_msg);
+        bool ret;
+        ret = process_message(&send_msg, &reply_msg);
 
-        if (result) {
-            int retVal;
+        CY_MEMTRACK_FREE(send_msg.buf_p);
 
-            DEBUG_ASSERT(reply_msg.buf_p != NULL);
+        if (ret) {
+            cy_rslt_t result;
+            result = cy_rtos_put_queue( &s_usb_tx_queue,
+                                        &reply_msg,
+                                        0,
+                                        false);
 
-            /* Sending one reply to host */
-            retVal = USBD_CDC_Write(s_usb_cdcHandle, reply_msg.buf_p, reply_msg.length, 0);
+            if (result != CY_RSLT_SUCCESS) {
+                size_t num_items = 0;
+                cy_rtos_count_queue(&s_usb_tx_queue,
+                                    &num_items);
+
+                CY_LOGD(TAG, "%s [%d]: put_tx_queue failed - num_items = %d", __FUNCTION__, __LINE__, num_items);
+                VoidAssert(0);
+            }
+        }
+
+        cyhal_syspm_sleep();
+    }
+}
+
+static void usbd_cdc_write_task(void)
+{
+    CY_LOGD(TAG, "%s [%d]\n", __FUNCTION__, __LINE__);
+
+    for (;;)
+    {
+        /* Wait for configuration */
+        while ((USBD_GetState() & (USB_STAT_CONFIGURED | USB_STAT_SUSPENDED)) != USB_STAT_CONFIGURED)
+        {
+            cyhal_system_delay_ms(USB_CONFIG_DELAY);
+        }
+
+        cy_message_t reply_msg = {
+            .buf_p = NULL,
+            .length = 0,
+        };
+
+        while (cy_rtos_get_queue( &s_usb_tx_queue,
+                                  &reply_msg,
+                                  CY_RTOS_NEVER_TIMEOUT,
+                                  false) != CY_RSLT_SUCCESS) {
+            CY_LOGD(TAG, "%s [%d]: s_usb_tx_queue - timeout! repeat", __FUNCTION__, __LINE__);
+        }
+
+        int retVal;
+        DEBUG_ASSERT(reply_msg.buf_p != NULL);
+
+        /* Sending one reply to host */
+        retVal = USBD_CDC_Write(s_usb_cdcHandle, reply_msg.buf_p, reply_msg.length, 0);
+
+        /* Waits for specified number of bytes to be written to host */
+        USBD_CDC_WaitForTX(s_usb_cdcHandle, 0);
+        DEBUG_PRINT(("[%d] %d written\n", __LINE__, retVal));
+
+        // toggle the LED to show activity
+        cyhal_gpio_toggle(CYBSP_USER_LED);
+
+        /* If the last sent packet is exactly the maximum packet
+        *  size, it is followed by a zero-length packet to assure
+        *  that the end of the segment is properly identified by
+        *  the terminal.
+        */
+
+        if (reply_msg.length % USB_FS_BULK_MAX_PACKET_SIZE == 0)
+        {
+            /* Sending zero-length packet to host */
+            retVal = USBD_CDC_Write(s_usb_cdcHandle, NULL, 0, 0);
 
             /* Waits for specified number of bytes to be written to host */
             USBD_CDC_WaitForTX(s_usb_cdcHandle, 0);
             DEBUG_PRINT(("[%d] %d written\n", __LINE__, retVal));
-
-            /* If the last sent packet is exactly the maximum packet
-            *  size, it is followed by a zero-length packet to assure
-            *  that the end of the segment is properly identified by
-            *  the terminal.
-            */
-
-            if (reply_msg.length % USB_FS_BULK_MAX_PACKET_SIZE == 0)
-            {
-                /* Sending zero-length packet to host */
-                retVal = USBD_CDC_Write(s_usb_cdcHandle, NULL, 0, 0);
-
-                /* Waits for specified number of bytes to be written to host */
-                USBD_CDC_WaitForTX(s_usb_cdcHandle, 0);
-                DEBUG_PRINT(("[%d] %d written\n", __LINE__, retVal));
-            }
-
-            CY_MEMTRACK_FREE(reply_msg.buf_p);
         }
 
-        CY_MEMTRACK_FREE(send_msg.buf_p);
+        CY_MEMTRACK_FREE(reply_msg.buf_p);
 
         CY_MEMTRACK_MALLOC_STATS();
 
         cyhal_syspm_sleep();
     }
 }
+
+
+/****************************************************************************
+ * Public Functions
+ *****************************************************************************/
+
+void setup_usbd_cdc_tasks(void)
+{
+    cy_rslt_t result;
+
+    /* setup the rx and tx queues */
+    VoidAssert(s_usb_rx_queue == NULL);
+    result = cy_rtos_init_queue(&s_usb_rx_queue,
+                                USB_RX_DATA_QUEUE_SIZE,
+                                sizeof(cy_message_t));
+    VoidAssert(result == CY_RSLT_SUCCESS);
+    VoidAssert(s_usb_rx_queue != NULL);
+
+    VoidAssert(s_usb_tx_queue == NULL);
+    result = cy_rtos_init_queue(&s_usb_tx_queue,
+                                USB_TX_DATA_QUEUE_SIZE,
+                                sizeof(cy_message_t));
+    VoidAssert(result == CY_RSLT_SUCCESS);
+    VoidAssert(s_usb_tx_queue != NULL);
+
+    /* Initialize the User LED */
+    result = cyhal_gpio_init(CYBSP_USER_LED,
+                             CYHAL_GPIO_DIR_OUTPUT,
+                             CYHAL_GPIO_DRIVE_STRONG,
+                             CYBSP_LED_STATE_OFF);
+    VoidAssert(result == CY_RSLT_SUCCESS);
+
+
+    /* Turning the LED on to indicate device is active */
+    cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_ON);
+
+    xTaskCreate((void *)usbd_cdc_read_task,
+                "USBD Reader",
+                USBD_CDC_TASK_STACK_SIZE,
+                NULL,
+                USBD_CDC_TASK_PRIORITY,
+                NULL);
+
+    xTaskCreate((void *)usbd_cdc_worker_task,
+                "USBD Worker",
+                USBD_CDC_TASK_STACK_SIZE,
+                NULL,
+                USBD_CDC_TASK_PRIORITY,
+                NULL);
+
+    xTaskCreate((void *)usbd_cdc_write_task,
+                "USBD Writer",
+                USBD_CDC_TASK_STACK_SIZE,
+                NULL,
+                USBD_CDC_TASK_PRIORITY,
+                NULL);
+}
+
+#if 0
+void cleanup_usbd_cdc_tasks(void)
+{
+    if (s_usb_rx_queue != NULL) {
+        cy_rtos_deinit_queue(&s_usb_rx_queue);
+        s_usb_rx_queue = NULL;
+    }
+
+    if (s_usb_tx_queue != NULL) {
+        cy_rtos_deinit_queue(&s_usb_tx_queue);
+        s_usb_tx_queue = NULL;
+    }
+}
+#endif
 
 /* [] END OF FILE */
