@@ -41,6 +41,7 @@
 /* Include header files */
 #include <stdio.h>
 #include "feature_config.h"
+#include "product_config.h"
 
 #include "usbd_cdc_task.h"
 #include "cybsp.h"
@@ -50,14 +51,17 @@
 #include "USB.h"
 #include "USB_CDC.h"
 
-//#include "cy_time_misc.h"
 #include "cy_debug.h"
-
+#include "cyabs_rtos.h"
+#include "cy_memtrack.h"
+#include "cmd_handler.h"
 
 /****************************************************************************
  * Local Definition
  *****************************************************************************/
 #define USB_CONFIG_DELAY          (50U) /* In milliseconds */
+#define USB_RX_DATA_QUEUE_SIZE    10
+
 
 /****************************************************************************
  * Local Data
@@ -65,14 +69,15 @@
 static const char *TAG = "usbd_cdc";
 
 static const USB_DEVICE_INFO s_usb_deviceInfo = {
-    0x058B,                       /* VendorId    */
-    0x027D,                       /* ProductId    */
-    "Infineon Technologies",      /* VendorName   */
-    "CDC Code Example",           /* ProductName  */
-    "12345678"                    /* SerialNumber */
+    MY_VENDOR_ID,              /* VendorId    */
+    MY_PRODUCT_ID,             /* ProductId    */
+    MY_VENDOR_NAME,            /* VendorName   */
+    MY_PRODUCT_NAME,           /* ProductName  */
+    MY_SERIAL_NUMBER           /* SerialNumber */
 };
 
-
+static cy_queue_t s_usb_rx_queue = NULL;
+static USB_CDC_HANDLE s_usb_cdcHandle = 0;
 
 /****************************************************************************
  * Local Functions
@@ -128,29 +133,14 @@ static USB_CDC_HANDLE usb_add_cdc(void)
  * Public Functions
  *****************************************************************************/
 
-/******************************************************************************
- * Function Name: iso7816_flush_task
- ******************************************************************************
- * Summary:
- *  This task initializes the LED and DFU middleware and then waits for host
- *  to start the DFU operation.
- *
- * Parameters:
- *  void
- *
- * Return:
- *  void
- *
- ******************************************************************************/
-void usbd_cdc_task(void)
+void usbd_cdc_read_task(void)
 {
-    USB_CDC_HANDLE usb_cdcHandle;
     char read_buffer[USB_FS_BULK_MAX_PACKET_SIZE];
-    char write_buffer[USB_FS_BULK_MAX_PACKET_SIZE];
+    static char cached_buffer[USB_FS_BULK_MAX_PACKET_SIZE * 10];
 
     cy_rslt_t result;
-    int num_bytes_received;
-    int num_bytes_to_write = 0;
+    int num_bytes_read;
+    int num_bytes_cached = 0;
 
     CY_LOGD(TAG, "%s [%d]\n", __FUNCTION__, __LINE__);
 
@@ -168,7 +158,7 @@ void usbd_cdc_task(void)
     USBD_Init();
 
     /* Endpoint Initialization for CDC class */
-    usb_cdcHandle = usb_add_cdc();
+    s_usb_cdcHandle = usb_add_cdc();
 
     /* Set device info used in enumeration */
     USBD_SetDeviceInfo(&s_usb_deviceInfo);
@@ -179,6 +169,14 @@ void usbd_cdc_task(void)
     /* Turning the LED on to indicate device is active */
     cyhal_gpio_write(CYBSP_USER_LED, CYBSP_LED_STATE_ON);
 
+    VoidAssert(s_usb_rx_queue == NULL);
+
+    result = cy_rtos_init_queue(&s_usb_rx_queue,
+                                USB_RX_DATA_QUEUE_SIZE,
+                                sizeof(cy_message_t));
+    VoidAssert(result == CY_RSLT_SUCCESS);
+    VoidAssert(s_usb_rx_queue != NULL);
+
     for (;;)
     {
         /* Wait for configuration */
@@ -187,25 +185,98 @@ void usbd_cdc_task(void)
             cyhal_system_delay_ms(USB_CONFIG_DELAY);
         }
 
-        num_bytes_received = USBD_CDC_Receive(usb_cdcHandle, read_buffer, sizeof(read_buffer), 0);
-        if (num_bytes_received) {
-            DEBUG_PRINT(("%d received\n", num_bytes_received));
+        num_bytes_read = USBD_CDC_Receive(s_usb_cdcHandle, read_buffer, sizeof(read_buffer), 0);
+        DEBUG_PRINT(("%d read\n", num_bytes_read));
+
+        DEBUG_ASSERT(num_bytes_read <= (sizeof(cached_buffer) - num_bytes_cached));
+        memcpy(cached_buffer + num_bytes_cached, read_buffer, num_bytes_read);
+        num_bytes_cached += num_bytes_read;
+
+        if ((num_bytes_cached > 0) &&
+            ((read_buffer[num_bytes_read - 1] == '\r') ||
+             (read_buffer[num_bytes_read - 1] == '\n')))
+        {
+            cy_message_t message;
+            message.length = num_bytes_cached;
+            message.buf_p = (uint8_t*)CY_MEMTRACK_MALLOC(message.length);
+            VoidAssert(message.buf_p != NULL);
+
+            memcpy(message.buf_p, cached_buffer, message.length);
+            result = cy_rtos_put_queue( &s_usb_rx_queue,
+                                        &message,
+                                        0,
+                                        false);
+
+            if (result != CY_RSLT_SUCCESS) {
+                size_t num_items = 0;
+                cy_rtos_count_queue(&s_usb_rx_queue,
+                                    &num_items);
+
+                CY_LOGD(TAG, "%s [%d]: put_queue failed - num_items = %d", __FUNCTION__, __LINE__, num_items);
+                VoidAssert(0);
+            }
+
+            num_bytes_cached = 0;
         }
 
-        memcpy(write_buffer + num_bytes_to_write, read_buffer, num_bytes_received);
-        num_bytes_to_write +=  num_bytes_received;
+        cyhal_syspm_sleep();
+    }
 
+    if (s_usb_rx_queue != NULL) {
+        cy_rtos_deinit_queue(&s_usb_rx_queue);
+        s_usb_rx_queue = NULL;
+    }
+}
 
-        if ((num_bytes_to_write > 0) &&
-            ((read_buffer[num_bytes_received - 1] == '\r') ||
-             (read_buffer[num_bytes_received - 1] == '\n')))
+void usbd_cdc_write_task(void)
+{
+    bool result;
+
+    CY_LOGD(TAG, "%s [%d]\n", __FUNCTION__, __LINE__);
+
+    /* Wait for rx_queue to be setup*/
+    while (s_usb_rx_queue == NULL)
+    {
+        cyhal_system_delay_ms(USB_CONFIG_DELAY);
+    }
+
+    for (;;)
+    {
+        /* Wait for configuration */
+        while ((USBD_GetState() & (USB_STAT_CONFIGURED | USB_STAT_SUSPENDED)) != USB_STAT_CONFIGURED)
         {
+            cyhal_system_delay_ms(USB_CONFIG_DELAY);
+        }
+
+        cy_message_t send_msg = {
+            .buf_p = NULL,
+            .length = 0,
+        };
+
+        while (cy_rtos_get_queue( &s_usb_rx_queue,
+                                  &send_msg,
+                                  CY_RTOS_NEVER_TIMEOUT,
+                                  false) != CY_RSLT_SUCCESS) {
+            CY_LOGD(TAG, "%s [%d]: s_usb_rx_queue - timeout! repeat", __FUNCTION__, __LINE__);
+        }
+
+        cy_message_t reply_msg = {
+            .buf_p = NULL,
+            .length = 0,
+        };
+
+        result = process_message(&send_msg, &reply_msg);
+
+        if (result) {
             int retVal;
-            /* Sending one packet to host */
-            retVal = USBD_CDC_Write(usb_cdcHandle, write_buffer, num_bytes_to_write, 0);
+
+            DEBUG_ASSERT(reply_msg.buf_p != NULL);
+
+            /* Sending one reply to host */
+            retVal = USBD_CDC_Write(s_usb_cdcHandle, reply_msg.buf_p, reply_msg.length, 0);
 
             /* Waits for specified number of bytes to be written to host */
-            USBD_CDC_WaitForTX(usb_cdcHandle, 0);
+            USBD_CDC_WaitForTX(s_usb_cdcHandle, 0);
             DEBUG_PRINT(("[%d] %d written\n", __LINE__, retVal));
 
             /* If the last sent packet is exactly the maximum packet
@@ -214,18 +285,22 @@ void usbd_cdc_task(void)
             *  the terminal.
             */
 
-            if (num_bytes_to_write == sizeof(write_buffer))
+            if (reply_msg.length % USB_FS_BULK_MAX_PACKET_SIZE == 0)
             {
                 /* Sending zero-length packet to host */
-                retVal = USBD_CDC_Write(usb_cdcHandle, NULL, 0, 0);
+                retVal = USBD_CDC_Write(s_usb_cdcHandle, NULL, 0, 0);
 
                 /* Waits for specified number of bytes to be written to host */
-                USBD_CDC_WaitForTX(usb_cdcHandle, 0);
+                USBD_CDC_WaitForTX(s_usb_cdcHandle, 0);
                 DEBUG_PRINT(("[%d] %d written\n", __LINE__, retVal));
             }
 
-            num_bytes_to_write = 0;
+            CY_MEMTRACK_FREE(reply_msg.buf_p);
         }
+
+        CY_MEMTRACK_FREE(send_msg.buf_p);
+
+        CY_MEMTRACK_MALLOC_STATS();
 
         cyhal_syspm_sleep();
     }

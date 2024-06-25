@@ -49,6 +49,7 @@
 #include "cyabs_rtos.h"
 #include "usbd_cdc_task.h"
 #include "cy_debug.h"
+#include "cy_memtrack.h"
 
 /*******************************************************************************
 * Macros
@@ -81,6 +82,8 @@ int main(void)
     /* Enable global interrupts */
     __enable_irq();
 
+    CY_MEMTRACK_INITIALIZE();
+
     /* Initialize retarget-io to use the debug UART port */
     cy_retarget_io_init(CYBSP_DEBUG_UART_TX, CYBSP_DEBUG_UART_RX, CY_RETARGET_IO_BAUDRATE);
 
@@ -91,8 +94,15 @@ int main(void)
                  "emUSB Device: CDC echo application "
                  "****************** \n\n"));
 
-    xTaskCreate((void *)usbd_cdc_task,
-                "USBD CDC Task",
+    xTaskCreate((void *)usbd_cdc_read_task,
+                "USBD Read Task",
+                USBD_CDC_TASK_STACK_SIZE,
+                NULL,
+                USBD_CDC_TASK_PRIORITY,
+                NULL);
+
+    xTaskCreate((void *)usbd_cdc_write_task,
+                "USBD Write Task",
                 USBD_CDC_TASK_STACK_SIZE,
                 NULL,
                 USBD_CDC_TASK_PRIORITY,

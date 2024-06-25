@@ -1,7 +1,7 @@
 /*******************************************************************************
-* File Name: memtrack_config.h
+* File Name: product_config.h
 *
-* Description: This file defines memory-tracking configuration parameters
+* Description: This file defines product information
 *
 * Related Document: See README.md
 *
@@ -39,8 +39,8 @@
  so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
-#ifndef SOURCE_MEMTRACK_CONFIG_H_
-#define SOURCE_MEMTRACK_CONFIG_H_
+#ifndef SOURCE_PRODUCT_CONFIG_H_
+#define SOURCE_PRODUCT_CONFIG_H_
 
 #ifdef __cplusplus
 extern "C"
@@ -50,13 +50,16 @@ extern "C"
 
 /*-- Public Definitions -------------------------------------------------*/
 
-/* whether to enable or disable memory-tracking */
-#define USE_CY_MEMTRACK         1   /* 1=enable, 0=disable */
+#define MY_VENDOR_ID                0x058B
+#define MY_PRODUCT_ID               0x027D
+#define MY_VENDOR_NAME              "Infineon Technologies"
+#define MY_PRODUCT_NAME             "Test Device"
+#define MY_SERIAL_NUMBER            "1234567890"
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif      /* SOURCE_MEMTRACK_CONFIG_H_ */
+#endif      /* SOURCE_PRODUCT_CONFIG_H_ */
 
 /* [] END OF FILE */

@@ -1,7 +1,7 @@
 /******************************************************************************
-* File Name: usbd_cdc_task.h
+* File Name: cmd_handler.h
 *
-* Description: This is the source code to handle USB device CDC communication
+* Description: This is the source code to handle commands received over USBD
 *
 * Related Document: See README.md
 *
@@ -38,21 +38,31 @@
 * so agrees to indemnify Cypress against all liability.
 *******************************************************************************/
 
-#ifndef SOURCE_USBD_CDC_TASK_H_
-#define SOURCE_USBD_CDC_TASK_H_
+#ifndef SOURCE_CMD_HANDLER_H_
+#define SOURCE_CMD_HANDLER_H_
+
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define USBD_CDC_TASK_STACK_SIZE 4096
-#define USBD_CDC_TASK_PRIORITY   CY_RTOS_PRIORITY_LOW
+/*-- Public Definitions -------------------------------------------------*/
 
-void usbd_cdc_read_task(void);
-void usbd_cdc_write_task(void);
+typedef struct {
+    uint8_t* buf_p;
+    uint16_t length;
+} cy_message_t;
+
+
+/*-- Public Functions -------------------------------------------------*/
+
+bool process_message(const cy_message_t* send_p,
+                     cy_message_t* reply_p);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* SOURCE_USBD_CDC_TASK_H_ */
+#endif /* SOURCE_CMD_HANDLER_H_ */
